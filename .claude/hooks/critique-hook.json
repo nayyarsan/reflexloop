@@ -1,0 +1,8 @@
+{
+  "Stop": [
+    {
+      "type": "command",
+      "command": "bash scripts/run-critique.sh \"$CLAUDE_SESSION_ID\" dev-agent"
+    }
+  ]
+}

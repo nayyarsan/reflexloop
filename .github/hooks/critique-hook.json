@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "agentStop": [
+      {
+        "type": "command",
+        "command": "bash scripts/run-critique.sh \"$COPILOT_SESSION_ID\" dev-agent"
+      }
+    ]
+  }
+}
