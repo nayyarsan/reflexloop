@@ -16,4 +16,13 @@ for d in "${DIRS[@]}"; do
   [ -d "$d" ] || { echo "MISSING: $d"; exit 1; }
   echo "OK: $d"
 done
+check_include() {
+  local file=$1
+  local ref=$2
+  grep -q "$ref" "$file" || { echo "MISSING reference '$ref' in $file"; exit 1; }
+  echo "OK: $file references $ref"
+}
+check_include ".claude/agents/dev-agent.md" "context/agents/dev-agent/system-prompt.md"
+check_include ".claude/agents/critique-agent.md" "context/agents/critique-agent/system-prompt.md"
+check_include ".claude/agents/refiner-agent.md" "context/agents/refiner-agent/system-prompt.md"
 echo "All directories present."
