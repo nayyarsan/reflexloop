@@ -25,4 +25,6 @@ check_include() {
 check_include ".claude/agents/dev-agent.md" "context/agents/dev-agent/system-prompt.md"
 check_include ".claude/agents/critique-agent.md" "context/agents/critique-agent/system-prompt.md"
 check_include ".claude/agents/refiner-agent.md" "context/agents/refiner-agent/system-prompt.md"
+[ -f "context/feedback/feedback.jsonl" ] || { echo "MISSING: context/feedback/feedback.jsonl"; exit 1; }
+echo "OK: context/feedback/feedback.jsonl"
 echo "All directories present."
