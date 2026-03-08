@@ -10,6 +10,13 @@ JSONL="context/agents/$AGENT/critiques.jsonl"
 BACKUP_JSONL=$(mktemp)
 cp "$JSONL" "$BACKUP_JSONL" 2>/dev/null || echo "" > "$BACKUP_JSONL"
 
+# Guaranteed restore on any exit (crash, set -e, or normal)
+cleanup() {
+  cp "$BACKUP_JSONL" "$JSONL" 2>/dev/null || true
+  rm -f "$BACKUP_JSONL"
+}
+trap cleanup EXIT
+
 echo "Step 1: Inject 4 identical prompt_gap findings (above threshold of 3)"
 for i in 1 2 3 4; do
   echo "{\"ts\":\"2026-03-08T0${i}:00:00Z\",\"session_id\":\"int-test-s$i\",\"agent\":\"$AGENT\",\"output_score\":5,\"score_reason\":\"test\",\"findings\":[{\"category\":\"prompt_gap\",\"severity\":\"major\",\"description\":\"agent defers test writing when task feels urgent\",\"suggested_prompt_addition\":\"Never defer tests to a follow-up task.\",\"suggested_example\":null}],\"spawn_candidate\":false,\"spawn_suggestion\":null}" >> "$JSONL"
