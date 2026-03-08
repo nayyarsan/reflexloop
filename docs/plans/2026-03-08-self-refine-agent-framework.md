@@ -1205,6 +1205,259 @@ git commit -m "docs: add README and developer guide"
 
 ---
 
+---
+
+### Task 12: User Feedback Integration
+
+**Goal:** Allow user feedback (thumbs down, comments) from chat sessions to enrich — but not override — the automated critique pipeline.
+
+**Design:**
+- User feedback is an input *to* critique-agent, never directly to refiner-agent
+- critique-agent independently decides if feedback reveals a real prompt gap
+- A user-flagged session with a matching automated finding counts 1.5x toward threshold
+- A user-flagged session with no automated finding adds a `disputed` flag only — never triggers refinement alone
+- Internal standards remain the authority; user feedback is a hint
+
+**Files:**
+- Modify: `context/agents/critique-agent/system-prompt.md`
+- Modify: `context/agents/critique-agent/examples.md`
+- Modify: `scripts/run-critique.sh`
+- Create: `scripts/submit-feedback.sh`
+- Create: `context/feedback/feedback.jsonl`
+- Modify: `tests/validate-structure.sh`
+- Create: `tests/test-submit-feedback.sh`
+
+**Step 1: Write failing test — validate feedback.jsonl exists and is valid JSON lines**
+
+Add to `tests/validate-structure.sh`:
+```bash
+[ -f "context/feedback/feedback.jsonl" ] || { echo "MISSING: context/feedback/feedback.jsonl"; exit 1; }
+echo "OK: context/feedback/feedback.jsonl"
+```
+
+**Step 2: Run test — verify it fails**
+
+```bash
+bash tests/validate-structure.sh 2>&1 | tail -5
+```
+Expected: `MISSING: context/feedback/feedback.jsonl`
+
+**Step 3: Create feedback store**
+
+```bash
+mkdir -p context/feedback
+echo "" > context/feedback/feedback.jsonl
+```
+
+**Step 4: Write `scripts/submit-feedback.sh`**
+
+This is the developer-facing tool. Run after a session to flag it.
+
+```bash
+#!/usr/bin/env bash
+# Usage: submit-feedback.sh <session-id> <agent-name> <rating: 1-5> [comment]
+# Appends a feedback entry to context/feedback/feedback.jsonl
+set -euo pipefail
+
+SESSION_ID="${1:?Usage: submit-feedback.sh <session-id> <agent-name> <rating> [comment]}"
+AGENT="${2:?}"
+RATING="${3:?Rating must be 1-5}"
+COMMENT="${4:-}"
+TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+[[ "$RATING" =~ ^[1-5]$ ]] || { echo "ERROR: rating must be 1-5"; exit 1; }
+
+ENTRY=$(python3 -c "
+import json
+print(json.dumps({
+  'ts': '$TS',
+  'session_id': '$SESSION_ID',
+  'agent': '$AGENT',
+  'rating': int('$RATING'),
+  'comment': '''$COMMENT''',
+  'incorporated': None
+}))
+")
+
+echo "$ENTRY" >> context/feedback/feedback.jsonl
+echo "Feedback recorded for session $SESSION_ID (rating: $RATING)"
+
+# If rating <= 2 (negative), re-run critique with feedback attached
+if [ "$RATING" -le 2 ]; then
+  echo "Low rating detected — re-running critique with feedback context..."
+  USER_FEEDBACK="$COMMENT" bash scripts/run-critique.sh "$SESSION_ID" "$AGENT"
+fi
+```
+
+**Step 5: Write failing test for submit-feedback.sh**
+
+Create `tests/test-submit-feedback.sh`:
+```bash
+#!/usr/bin/env bash
+set -e
+mkdir -p context/feedback
+echo "" > context/feedback/feedback.jsonl
+
+# Test 1: valid submission appends to feedback.jsonl
+bash scripts/submit-feedback.sh "test-session-fb" "dev-agent" "4" "Good but missed edge case"
+LINES=$(grep -c . context/feedback/feedback.jsonl 2>/dev/null || echo 0)
+[ "$LINES" -ge 1 ] || { echo "FAIL: feedback.jsonl not updated"; exit 1; }
+echo "PASS: feedback appended"
+
+# Test 2: invalid rating rejected
+bash scripts/submit-feedback.sh "s1" "dev-agent" "9" 2>&1 | grep -q "ERROR" \
+  && echo "PASS: invalid rating rejected" \
+  || { echo "FAIL: invalid rating not caught"; exit 1; }
+
+# Test 3: entry is valid JSON
+python3 -c "
+import json
+lines = [l for l in open('context/feedback/feedback.jsonl') if l.strip()]
+data = json.loads(lines[-1])
+assert 'session_id' in data
+assert 'rating' in data
+print('PASS: feedback entry is valid JSON with required fields')
+"
+
+echo "All feedback tests passed."
+```
+
+**Step 6: Run test — verify it fails**
+
+```bash
+bash tests/test-submit-feedback.sh 2>&1 | head -5
+```
+Expected: error (script doesn't exist yet)
+
+**Step 7: Make submit-feedback.sh executable and run test**
+
+```bash
+chmod +x scripts/submit-feedback.sh
+bash tests/test-submit-feedback.sh
+```
+Expected: `All feedback tests passed.`
+
+**Step 8: Update critique-agent system-prompt.md — add user feedback handling**
+
+Append to `context/agents/critique-agent/system-prompt.md` under `## Steps`:
+```markdown
+## User Feedback Handling
+
+If a `user_feedback` field is present in your input:
+- Treat it as a hint, not a verdict
+- Independently assess whether the feedback reveals a real prompt gap
+- If you agree: include a finding as normal, set `user_feedback_incorporated: true`
+- If you disagree or the feedback is a preference mismatch: set `user_feedback_incorporated: false` with a one-sentence reason
+- Never lower your output_score solely because of user rating
+
+The internal quality standard always takes precedence over user opinion.
+```
+
+Update the output JSON schema in the system prompt to add two fields:
+```json
+"user_feedback_incorporated": <true|false|null>,
+"user_feedback_reason": "<why incorporated or overruled, null if no feedback>"
+```
+
+**Step 9: Update `scripts/run-critique.sh` — pass user feedback when present**
+
+In `run-critique.sh`, look up the feedback.jsonl for this session and attach it to the critique prompt. Add after the `EXAMPLES` variable:
+
+```bash
+# Look up user feedback for this session
+USER_FEEDBACK_JSON=$(python3 -c "
+import json
+lines = [l for l in open('context/feedback/feedback.jsonl') if l.strip()]
+matches = [json.loads(l) for l in lines if json.loads(l).get('session_id') == '$SESSION_ID']
+print(json.dumps(matches[-1]) if matches else 'null')
+" 2>/dev/null || echo "null")
+```
+
+And inject into `CRITIQUE_PROMPT`:
+```bash
+## User feedback (if any)
+$USER_FEEDBACK_JSON
+```
+
+**Step 10: Update threshold weighting in `check-threshold.sh`**
+
+Add a 1.5x weight multiplier for sessions that have a corresponding low-rating feedback entry (rating ≤ 2):
+
+```bash
+# When counting cluster members, check if session has negative feedback
+# Weight: 1.5 if rating <= 2, else 1.0
+# Effective threshold: sum of weights >= THRESHOLD
+```
+
+Pass `context/feedback/feedback.jsonl` path to the LLM cluster prompt so it can apply weighting.
+
+**Step 11: Add example to critique-agent/examples.md**
+
+```markdown
+## Example 2: User feedback incorporated
+
+**Input:** Session where user rated 2/5 with comment "agent didn't ask about my test setup before writing tests"
+
+**critique-agent reasoning:** User is right — the agent assumed pytest when the project uses Jest. This is a prompt gap: the agent should ask about test framework if not evident from files.
+
+**Output (excerpt):**
+```json
+{
+  "output_score": 5,
+  "findings": [{
+    "category": "prompt_gap",
+    "severity": "moderate",
+    "description": "Agent assumed test framework without checking package.json or existing test files.",
+    "suggested_prompt_addition": "Before writing tests, check for existing test files or package.json to identify the test framework in use."
+  }],
+  "user_feedback_incorporated": true,
+  "user_feedback_reason": "User correctly identified that assuming pytest on a JS project caused unusable output."
+}
+```
+
+## Example 3: User feedback overruled
+
+**Input:** Session where user rated 1/5 with comment "I wanted it to use var not const"
+
+**critique-agent reasoning:** Using `const` is correct modern JavaScript. This is a stylistic preference that contradicts best practices, not a prompt gap.
+
+**Output (excerpt):**
+```json
+{
+  "output_score": 8,
+  "findings": [],
+  "user_feedback_incorporated": false,
+  "user_feedback_reason": "User preference for 'var' contradicts modern JS best practices. Agent correctly used const. No prompt change warranted."
+}
+```
+```
+
+**Step 12: Run all tests**
+
+```bash
+bash tests/validate-structure.sh && \
+bash tests/validate-agent-prompts.sh && \
+bash tests/validate-hooks.sh && \
+bash tests/test-check-threshold.sh && \
+bash tests/test-run-critique.sh && \
+bash tests/test-submit-feedback.sh && \
+echo "ALL TESTS PASSED"
+```
+Expected: `ALL TESTS PASSED`
+
+**Step 13: Commit**
+
+```bash
+git add context/feedback/ scripts/submit-feedback.sh tests/test-submit-feedback.sh \
+  context/agents/critique-agent/system-prompt.md \
+  context/agents/critique-agent/examples.md \
+  scripts/run-critique.sh scripts/check-threshold.sh \
+  tests/validate-structure.sh
+git commit -m "feat(feedback): add user feedback lane with two-tier trust model"
+```
+
+---
+
 ## Summary
 
 | Task | Output |
@@ -1220,6 +1473,7 @@ git commit -m "docs: add README and developer guide"
 | 9 | `run-critique.sh` with tests |
 | 10 | Integration test |
 | 11 | README |
+| 12 | User feedback integration (two-lane trust model) |
 
 **New agents** are spawned automatically when critique-agent detects a recurring task
 pattern — no manual scaffolding required. The framework grows itself.
