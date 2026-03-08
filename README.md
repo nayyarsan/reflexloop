@@ -22,34 +22,76 @@ No rollback incidents in the next 20 sessions. The commit is in git. The change 
 
 ### The loop
 
+```mermaid
+flowchart TD
+    A([dev-agent completes task]) --> B
+    B["scripts/run-critique.sh\n(fired by Stop / sessionEnd hook)"]
+    B --> C[critique-agent evaluates session]
+    C --> D["Append JSON finding → critiques.jsonl"]
+    D --> E{check-threshold.sh\nclusters last 20 sessions}
+    E -->|"< 3 sessions share a weakness"| F([WAIT — nothing committed])
+    E -->|"≥ 3 sessions share a weakness"| G[refiner-agent runs]
+    G --> H["Minimal targeted edit to system-prompt.md"]
+    H --> I["git commit: refine(dev-agent): batch #N"]
+    I --> J([Prompt is better. Loop continues.])
 ```
-dev-agent completes task
-        │
-        ▼  (Stop hook / agentStop hook fires automatically)
-        │
-scripts/run-critique.sh
-  ├── critique-agent evaluates session
-  │     • output quality score
-  │     • prompt gaps traced to specific steps
-  │     • suggested fixes (imperative sentences)
-  └── appends JSON finding → context/agents/dev-agent/critiques.jsonl
-        │
-scripts/check-threshold.sh
-  ├── clusters last 20 sessions' findings
-  ├── WAIT  (< 3 sessions share a weakness) → silent, nothing committed
-  └── REFINE (≥ 3 sessions) → refiner-agent runs
-        │
-refiner-agent
-  ├── makes minimal targeted change to system-prompt.md
-  ├── appends entry to changelog.md
-  └── git commit: "refine(dev-agent): batch #N — short description"
+
+### Agent architecture
+
+```mermaid
+graph LR
+    subgraph source["context/ — source of truth"]
+        SP["system-prompt.md"]
+        EX["examples.md"]
+        CJ["critiques.jsonl"]
+        CL["changelog.md"]
+    end
+
+    subgraph claude["Claude Code runtime"]
+        CA[".claude/agents/dev-agent.md"]
+        CH[".claude/hooks/critique-hook.json"]
+    end
+
+    subgraph copilot["GitHub Copilot runtime"]
+        GA[".github/agents/dev-agent.agent.md"]
+        GH[".github/hooks/critique-hook.json"]
+    end
+
+    SP -->|read by| CA
+    SP -->|read by| GA
+    CH -->|fires| CJ
+    GH -->|fires| CJ
+    CJ -->|informs| CL
 ```
 
 ### Runtime wiring
 
+```mermaid
+flowchart LR
+    subgraph cc["Claude Code"]
+        CCH["Stop hook\n.claude/hooks/"]
+        CCA[".claude/agents/*.md"]
+    end
+
+    subgraph cop["GitHub Copilot"]
+        CPH["sessionEnd hook\n.github/hooks/"]
+        CPA[".github/agents/*.agent.md"]
+    end
+
+    subgraph shared["Shared — context/agents/"]
+        SP["system-prompt.md"]
+        CJ["critiques.jsonl"]
+    end
+
+    CCH -->|"bash scripts/run-critique.sh"| CJ
+    CPH -->|"bash scripts/run-critique.sh"| CJ
+    CCA -->|wraps| SP
+    CPA -->|wraps| SP
+```
+
 | Step | Claude Code | GitHub Copilot |
 |------|------------|----------------|
-| Hook fires after session | `Stop` hook in `.claude/hooks/` | `agentStop` in `.github/hooks/` |
+| Hook fires after session | `Stop` hook in `.claude/hooks/` | `sessionEnd` in `.github/hooks/` |
 | Agent definitions | `.claude/agents/*.md` | `.github/agents/*.agent.md` |
 | Sequential handoff | subagent call | `handoffs` config |
 | Source of truth | `context/agents/` | `context/agents/` (shared) |
@@ -162,7 +204,7 @@ tail -1 context/agents/dev-agent/critiques.jsonl | python -m json.tool
 ### GitHub Copilot
 
 **How sessions are identified:**
-The `COPILOT_SESSION_ID` variable is set by the Copilot agent runtime. The `agentStop` hook in `.github/hooks/critique-hook.json` captures it.
+The `COPILOT_SESSION_ID` variable is set by the Copilot agent runtime. The `sessionEnd` hook in `.github/hooks/critique-hook.json` captures it.
 
 **Configuring handoffs (optional):**
 The `dev-agent.agent.md` file includes a `handoffs` block that offers a manual "Run critique" button after each session. This is in addition to the automatic hook — useful for debugging.
@@ -170,7 +212,7 @@ The `dev-agent.agent.md` file includes a `handoffs` block that offers a manual "
 **Running scripts in VS Code:**
 Open the integrated terminal and run `bash scripts/run-critique.sh <session-id> dev-agent` directly. The scripts have no IDE-specific dependencies.
 
-**Verifying agentStop is wired:**
+**Verifying sessionEnd is wired:**
 Check `.github/hooks/critique-hook.json` is on your repo's default branch — Copilot coding agent only reads hooks from the default branch.
 
 ## Use cases in SDLC

@@ -12,6 +12,12 @@ COMMENT="${4:-}"
 FEEDBACK_FILE="context/feedback/feedback.jsonl"
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ")
 
+# Validate agent name — prevent path traversal
+if ! [[ "$AGENT" =~ ^[a-z-]+$ ]]; then
+  echo "ERROR: agent name must match [a-z-]+, got: $AGENT"
+  exit 1
+fi
+
 # Validate rating
 if ! [[ "$RATING" =~ ^[1-5]$ ]]; then
   echo "ERROR: rating must be an integer between 1 and 5, got: $RATING"
@@ -22,15 +28,17 @@ fi
 mkdir -p "$(dirname "$FEEDBACK_FILE")"
 touch "$FEEDBACK_FILE"
 
-# Append feedback entry as JSON
+# Append feedback entry as JSON — pass vars via env to avoid shell injection
+ENTRY_TS="$TS" ENTRY_SESSION="$SESSION_ID" ENTRY_AGENT="$AGENT" \
+ENTRY_RATING="$RATING" ENTRY_COMMENT="$COMMENT" \
 python -c "
-import json
+import json, os
 entry = {
-    'ts': '$TS',
-    'session_id': '$SESSION_ID',
-    'agent': '$AGENT',
-    'rating': int('$RATING'),
-    'comment': r'''$COMMENT''',
+    'ts': os.environ['ENTRY_TS'],
+    'session_id': os.environ['ENTRY_SESSION'],
+    'agent': os.environ['ENTRY_AGENT'],
+    'rating': int(os.environ['ENTRY_RATING']),
+    'comment': os.environ['ENTRY_COMMENT'],
     'incorporated': None
 }
 print(json.dumps(entry))

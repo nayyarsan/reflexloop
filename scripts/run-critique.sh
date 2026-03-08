@@ -6,6 +6,13 @@ set -euo pipefail
 
 SESSION_ID="${1:?Usage: run-critique.sh <session-id> <agent-name>}"
 AGENT="${2:?Usage: run-critique.sh <session-id> <agent-name>}"
+
+# Validate agent name — prevent path traversal
+if ! [[ "$AGENT" =~ ^[a-z-]+$ ]]; then
+  echo "ERROR: agent name must match [a-z-]+, got: $AGENT"
+  exit 1
+fi
+
 JSONL="context/agents/$AGENT/critiques.jsonl"
 SYSTEM_PROMPT="context/agents/$AGENT/system-prompt.md"
 EXAMPLES="context/agents/$AGENT/examples.md"
@@ -21,14 +28,14 @@ fi
 touch "$JSONL"
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
-  # Append a placeholder finding for testing — no LLM call needed
+  # Append a placeholder finding for testing — pass vars via env to avoid injection
+  ENTRY_TS="$TS" ENTRY_SESSION="$SESSION_ID" ENTRY_AGENT="$AGENT" \
   python -c "
-import json
-from datetime import datetime
+import json, os
 entry = {
-    'ts': '$TS',
-    'session_id': '$SESSION_ID',
-    'agent': '$AGENT',
+    'ts': os.environ['ENTRY_TS'],
+    'session_id': os.environ['ENTRY_SESSION'],
+    'agent': os.environ['ENTRY_AGENT'],
     'output_score': 7,
     'score_reason': 'dry-run placeholder — no LLM call made',
     'findings': [],
@@ -47,14 +54,16 @@ fi
 USER_FEEDBACK="null"
 FEEDBACK_FILE="context/feedback/feedback.jsonl"
 if [ -f "$FEEDBACK_FILE" ]; then
-  USER_FEEDBACK=$(python -c "
-import json
-lines = [l for l in open('$FEEDBACK_FILE') if l.strip()]
+  USER_FEEDBACK=$(FEEDBACK_FILE="$FEEDBACK_FILE" LOOKUP_SESSION="$SESSION_ID" python -c "
+import json, os
+feedback_file = os.environ['FEEDBACK_FILE']
+session_id = os.environ['LOOKUP_SESSION']
+lines = [l for l in open(feedback_file) if l.strip()]
 matches = []
 for l in lines:
     try:
         d = json.loads(l)
-        if d.get('session_id') == '$SESSION_ID':
+        if d.get('session_id') == session_id:
             matches.append(d)
     except:
         pass
@@ -100,12 +109,13 @@ if [ -n "$FINDING" ] && python -c "import json,sys; json.loads(sys.stdin.read())
   echo "Critique appended to $JSONL"
 else
   # Fallback: append a minimal valid entry so the pipeline doesn't break
+  ENTRY_TS="$TS" ENTRY_SESSION="$SESSION_ID" ENTRY_AGENT="$AGENT" \
   python -c "
-import json
+import json, os
 entry = {
-    'ts': '$TS',
-    'session_id': '$SESSION_ID',
-    'agent': '$AGENT',
+    'ts': os.environ['ENTRY_TS'],
+    'session_id': os.environ['ENTRY_SESSION'],
+    'agent': os.environ['ENTRY_AGENT'],
     'output_score': 0,
     'score_reason': 'claude CLI unavailable or returned invalid JSON',
     'findings': [],
@@ -124,7 +134,10 @@ THRESHOLD_RESULT=$(bash scripts/check-threshold.sh "$AGENT" 2>/dev/null || echo 
 
 if [[ "$THRESHOLD_RESULT" == REFINE* ]]; then
   CLUSTER_JSON="${THRESHOLD_RESULT#REFINE }"
-  BATCH_N=$(python -c "import json,sys; print(json.loads('$CLUSTER_JSON').get('batch_number','N'))" 2>/dev/null || echo "N")
+  BATCH_N=$(CLUSTER_JSON="$CLUSTER_JSON" python -c "
+import json, os
+print(json.loads(os.environ['CLUSTER_JSON']).get('batch_number', 'N'))
+" 2>/dev/null || echo "N")
 
   echo "Threshold crossed — invoking refiner-agent for batch #$BATCH_N"
 
@@ -152,10 +165,16 @@ $(cat "$EXAMPLES" 2>/dev/null || echo 'No examples.')"
     COMMIT_MSG="refine($AGENT): batch #$BATCH_N — auto-refinement"
   fi
 
+  EVIDENCE=$(CLUSTER_JSON="$CLUSTER_JSON" python -c "
+import json, os
+d = json.loads(os.environ['CLUSTER_JSON'])
+print(f\"cluster of {d['cluster']['count']} sessions\")
+" 2>/dev/null || echo "see critiques.jsonl")
+
   git add "context/agents/$AGENT/"
   git commit -m "$COMMIT_MSG
 
-Critique evidence: $(echo "$CLUSTER_JSON" | python -c "import json,sys; d=json.load(sys.stdin); print(f\"cluster of {d['cluster']['count']} sessions\")" 2>/dev/null || echo "see critiques.jsonl")
+Critique evidence: $EVIDENCE
 
 Co-Authored-By: refiner-agent <noreply@selfrefine>"
 
