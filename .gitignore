@@ -1,0 +1,17 @@
+# Machine-local Claude Code settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Node (if bats installed locally)
+node_modules/
+
+# Temp/scratch
+*.tmp
+*.bak

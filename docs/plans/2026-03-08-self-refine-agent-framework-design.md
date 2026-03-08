@@ -343,3 +343,27 @@ handoffs:
 | [AgentDevel (2601.04620)](https://arxiv.org/abs/2601.04620) | Regression-awareness, single canonical version line, auditable specs |
 | [AgentEvolver (2511.10395)](https://arxiv.org/abs/2511.10395) | Efficient self-evolving agent lifecycle |
 | [EvolveR (2510.16079)](https://arxiv.org/abs/2510.16079) | Experience-driven agent improvement |
+
+---
+
+## Design Decisions — Research Grounding
+
+This section maps each architectural choice to the research that informed it.
+
+### Why separate agents instead of one self-critiquing model?
+Inspired by **Self-Refine (2303.17651)**: the paper uses a single model for all three roles (generate, critique, refine). We separate them deliberately — each agent has a distinct system prompt and can be refined independently. If critique-agent develops a blind spot, it can be corrected without touching dev-agent.
+
+### Why a JSONL evidence log instead of in-context memory?
+Inspired by **ACE (2510.04618)**: contexts as evolving playbooks that accumulate strategies incrementally. JSONL gives us: append-only auditability, structured clustering, and a format that survives context window limits. The evidence persists across sessions and runtimes.
+
+### Why a threshold (≥3 sessions) before applying a refinement?
+Inspired by **AgentDevel (2601.04620)**: non-regression as a primary objective. A single bad session should never change a prompt. The threshold prevents prompt instability from noisy critiques while still allowing genuine recurring weaknesses to surface.
+
+### Why a WINDOW (last 20 sessions) for clustering?
+Old failures should not override recent good behaviour. The window ensures the refiner responds to the agent's current state, not its history from six months ago. This prevents the prompt from accumulating fossil constraints that no longer reflect real failure modes.
+
+### Why one fix per refinement cycle?
+Directly from **AgentDevel**: maintain a single canonical version line and minimize regressions. Batching multiple changes per commit makes it impossible to identify which change fixed or broke a behaviour. One change, one commit, one traceable cause.
+
+### Why user feedback as a hint rather than direct input?
+User preferences are not quality signals. A user preferring `var` over `const` should not weaken an agent's modern-JavaScript constraint. The two-lane trust model (critique-agent independently evaluates feedback) ensures internal standards remain the authority while still surfacing genuine user pain faster.
