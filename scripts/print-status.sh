@@ -9,8 +9,17 @@ CHANGELOG="context/agents/$AGENT/changelog.md"
 THRESHOLD="${THRESHOLD:-3}"
 WINDOW="${WINDOW:-20}"
 
+PROMPT="context/agents/$AGENT/system-prompt.md"
+PROMPT_WORDS=0
+PROMPT_LINES=0
+if [ -f "$PROMPT" ]; then
+  PROMPT_WORDS=$(wc -w < "$PROMPT")
+  PROMPT_LINES=$(wc -l < "$PROMPT")
+fi
+
 echo "=== reflexloop status: $AGENT ==="
 echo "Threshold: $THRESHOLD  |  Window: $WINDOW"
+echo "Prompt size: ~${PROMPT_WORDS} words / ${PROMPT_LINES} lines (budget: ≤1200 tokens / ≤80 lines)"
 echo ""
 
 if [ ! -f "$JSONL" ]; then

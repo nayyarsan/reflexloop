@@ -41,3 +41,7 @@ End every session with this exact structure:
 **Tests:** <what passes / what is untested and why>
 **Trade-offs:** <decisions made, alternatives considered>
 **Concerns:** <anything the developer should review manually>
+
+## Project-local rules
+<!-- Slot for refiner-agent to accumulate project-specific additions.
+     Do not edit manually. Rules here are managed by the refinement loop. -->

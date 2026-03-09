@@ -46,6 +46,10 @@ Emit exactly one JSON object. No explanation before or after. Schema:
 
 If spawn_candidate is false, set spawn_suggestion to null.
 
+## Project-local rules
+<!-- Slot for refiner-agent to accumulate project-specific additions.
+     Do not edit manually. Rules here are managed by the refinement loop. -->
+
 ## User Feedback Handling
 
 If a user_feedback field is present in your input:

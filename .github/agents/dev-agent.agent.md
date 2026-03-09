@@ -12,6 +12,14 @@ handoffs:
     agent: critique-agent
     prompt: "Critique the session above. Read context/agents/dev-agent/system-prompt.md and context/agents/dev-agent/examples.md as reference. Output valid JSON only."
     send: false
+  - label: "Refine dev-agent prompt (threshold-gated)"
+    agent: refiner-agent
+    prompt: "Run bash scripts/check-threshold.sh dev-agent. If output starts with REFINE, apply the indicated fix to context/agents/dev-agent/system-prompt.md and update the changelog. If output starts with WAIT, report the current gap count and how many more sessions are needed. Prefer merging existing rules over appending. Respect the ≤80 line budget."
+    send: false
+  - label: "Refactor dev-agent prompt (compression only)"
+    agent: refiner-agent
+    prompt: "Run bash scripts/refactor-prompt.sh dev-agent to get instructions, then execute the compression pass on context/agents/dev-agent/system-prompt.md. Remove duplicates, merge overlapping rules, simplify wording. Do NOT add new constraints. Update the changelog and report word count before and after."
+    send: false
 ---
 
 <!-- SOURCE OF TRUTH: context/agents/dev-agent/system-prompt.md -->
