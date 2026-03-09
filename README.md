@@ -171,13 +171,23 @@ bash scripts/check-threshold.sh dev-agent
 
 Output: `WAIT` (not enough sessions yet) or `REFINE` (a batch is ready).
 
+### 5b. Compress a prompt (optional)
+
+If a prompt has grown through many refinements, run a compression pass:
+
+```bash
+bash scripts/refactor-prompt.sh dev-agent
+```
+
+This prints a structured prompt to pass to `refiner-agent` in compression-only mode: it merges overlapping rules, removes duplicates, and simplifies wording — without adding new constraints.
+
 ### 6. Inspect the status dashboard
 
 ```bash
 bash scripts/print-status.sh dev-agent
 ```
 
-Shows: total sessions, critique clusters, last refinement batch, current threshold settings.
+Shows: total sessions, critique clusters, last refinement batch, current threshold settings, and current prompt word count vs the ≤1,200 token budget.
 
 ## Runtime integration
 
@@ -207,7 +217,12 @@ tail -1 context/agents/dev-agent/critiques.jsonl | python -m json.tool
 The `COPILOT_SESSION_ID` variable is set by the Copilot agent runtime. The `sessionEnd` hook in `.github/hooks/critique-hook.json` captures it.
 
 **Configuring handoffs (optional):**
-The `dev-agent.agent.md` file includes a `handoffs` block that offers a manual "Run critique" button after each session. This is in addition to the automatic hook — useful for debugging.
+The `dev-agent.agent.md` file includes three handoff actions:
+- **Run critique** — manually trigger critique-agent on the current session
+- **Refine dev-agent prompt** — runs `check-threshold.sh` and applies a fix if threshold is crossed
+- **Refactor dev-agent prompt** — compression-only pass: merges redundant rules, removes duplicates, no new constraints added
+
+These complement the automatic `sessionEnd` hook — useful for debugging or on-demand prompt maintenance.
 
 **Running scripts in VS Code:**
 Open the integrated terminal and run `bash scripts/run-critique.sh <session-id> dev-agent` directly. The scripts have no IDE-specific dependencies.
@@ -232,7 +247,7 @@ Every critique entry in `critiques.jsonl` is a structured record of what the age
 ### Recipes
 
 **Guardrail on Copilot for PR-driven teams:**
-Add a CI step that runs `bash tests/validate-agent-prompts.sh` on every PR. If a refinement commit changed a system prompt in a way that removes required sections, the check fails before merge.
+Add a CI step that runs `bash tests/validate-agent-prompts.sh` on every PR. It checks that all required sections are present and that no prompt exceeds `MAX_LINES` (default: 80). If a refinement commit removes a required section or causes prompt bloat, the check fails before merge.
 
 **Trunk-based development with ephemeral branches:**
 Because the critique pipeline writes to `context/agents/` rather than the agent adapter files, refinement commits are clean and easy to cherry-pick or rebase. The JSONL log stays on trunk; agent improvements merge naturally.
@@ -246,6 +261,12 @@ Reflexloop is to agent prompts what static analysis is to code — a lightweight
 **Minimal diffs:** `refiner-agent` is instructed to make one change per batch — a single added constraint, a rewritten step, or one new example. It cannot rewrite an entire prompt.
 
 **Threshold gating:** Refinements only trigger when the same weakness appears in ≥3 sessions (configurable). A single bad session never changes a prompt.
+
+**Severity gate:** The refiner only promotes `major` or `moderate` findings to prompt changes. `minor` findings are skipped unless no higher-priority work exists, preventing stylistic noise from drifting into prompts.
+
+**Token budget:** System prompts are capped at ≤1,200 tokens / ≤80 lines. When a prompt approaches the limit, the refiner is instructed to merge or compress existing rules rather than append. Run `scripts/refactor-prompt.sh <agent>` for an on-demand compression pass. `validate-agent-prompts.sh` enforces this limit as a hard CI check.
+
+**Accumulation slot:** Each system prompt has a `## Project-local rules` section — a dedicated slot where the refiner writes accumulated project-specific constraints, keeping the core `## Constraints` section stable and readable.
 
 **Avoiding overfitting:** The `WINDOW` variable (default: 20) limits how far back clustering looks. Old critiques age out so a historical pattern doesn't override recent good behaviour.
 
@@ -277,6 +298,7 @@ The `changelog.md` tells you which batch each commit corresponds to.
 | `THRESHOLD` | 3 | Sessions with same weakness before refinement triggers |
 | `WINDOW` | 20 | How many recent sessions to look at |
 | `DRY_RUN` | 0 | Set to 1 to skip LLM calls (for testing) |
+| `MAX_LINES` | 80 | Max non-blank lines per system prompt (enforced by `validate-agent-prompts.sh`) |
 
 Override inline:
 
